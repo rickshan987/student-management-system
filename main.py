@@ -1,7 +1,9 @@
 
+from flask import Flask, render_template, request, redirect, url_for
 import json
 import os
 
+app = Flask(__name__)
 FILE_NAME = "students.json"
 
 
@@ -20,77 +22,82 @@ def save_students():
 students = load_students()
 
 
+@app.route("/")
+def home():
+    search = request.args.get("search", "").strip().lower()
+
+    visible_students = [
+        (i, student)
+        for i, student in enumerate(students)
+        if search in student["name"].lower()
+    ]
+
+    average = (
+        round(sum(s["marks"] for s in students) / len(students), 2)
+        if students else 0
+    )
+
+    return render_template(
+        "index.html",
+        students=students,
+        visible_students=visible_students,
+        average=average,
+        search=search
+    )
+
+
+@app.route("/add", methods=["POST"])
 def add_student():
-    name = input("Enter student name: ").strip()
+    name = request.form.get("name", "").strip()
 
     try:
-        marks = float(input("Enter marks (0-100): "))
+        marks = float(request.form.get("marks", ""))
     except ValueError:
-        print("Please enter valid marks.")
-        return
+        return "Please enter valid marks.", 400
 
-    if not name:
-        print("Name cannot be empty.")
-        return
-
-    if not 0 <= marks <= 100:
-        print("Marks must be between 0 and 100.")
-        return
+    if not name or not 0 <= marks <= 100:
+        return "Enter a name and marks between 0 and 100.", 400
 
     students.append({"name": name, "marks": marks})
     save_students()
-    print("Student added successfully!")
+    return redirect(url_for("home"))
 
 
-def view_students():
-    if not students:
-        print("No students found.")
-        return
+@app.route("/delete/<int:index>", methods=["POST"])
+def delete_student(index):
+    if 0 <= index < len(students):
+        students.pop(index)
+        save_students()
 
-    for student in students:
-        print(f"Name: {student['name']}, Marks: {student['marks']}")
-
-
-def search_student():
-    name = input("Enter name to search: ").strip().lower()
-
-    for student in students:
-        if student["name"].lower() == name:
-            print(f"Name: {student['name']}, Marks: {student['marks']}")
-            return
-
-    print("Student not found.")
+    return redirect(url_for("home"))
 
 
-def average_marks():
-    if not students:
-        print("No marks available.")
-        return
+@app.route("/edit/<int:index>", methods=["GET", "POST"])
+def edit_student(index):
+    if not 0 <= index < len(students):
+        return "Student not found.", 404
 
-    average = sum(s["marks"] for s in students) / len(students)
-    print(f"Average marks: {average:.2f}")
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+
+        try:
+            marks = float(request.form.get("marks", ""))
+        except ValueError:
+            return "Please enter valid marks.", 400
+
+        if not name or not 0 <= marks <= 100:
+            return "Enter a name and marks between 0 and 100.", 400
+
+        students[index] = {"name": name, "marks": marks}
+        save_students()
+        return redirect(url_for("home"))
+
+    return render_template(
+        "edit.html",
+        student=students[index],
+        index=index
+    )
 
 
-while True:
-    print("\n--- Student Management System ---")
-    print("1. Add Student")
-    print("2. View Students")
-    print("3. Search Student")
-    print("4. Calculate Average Marks")
-    print("5. Exit")
-
-    choice = input("Enter your choice: ")
-
-    if choice == "1":
-        add_student()
-    elif choice == "2":
-        view_students()
-    elif choice == "3":
-        search_student()
-    elif choice == "4":
-        average_marks()
-    elif choice == "5":
-        print("Thank you!")
-        break
-    else:
-        print("Invalid choice. Try again.")
+if __name__ == "__main__":
+    app.run(debug=True)
