@@ -1,29 +1,41 @@
 
 from flask import Flask, render_template, request, redirect, url_for
-import json
 import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__)
-FILE_NAME = "students.json"
+
+
+def get_connection():
+    database_url = os.environ.get("DATABASE_URL")
+
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not configured.")
+
+    return psycopg2.connect(
+        database_url,
+        sslmode="require",
+        connect_timeout=10
+    )
 
 
 def load_students():
-    if os.path.exists(FILE_NAME):
-        with open(FILE_NAME, "r") as file:
-            return json.load(file)
-    return []
+    conn = get_connection()
 
-
-def save_students():
-    with open(FILE_NAME, "w") as file:
-        json.dump(students, file, indent=4)
-
-
-students = load_students()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, name, marks FROM students ORDER BY id"
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 @app.route("/")
 def home():
+    students = load_students()
     search = request.args.get("search", "").strip().lower()
 
     visible_students = [
@@ -33,7 +45,7 @@ def home():
     ]
 
     average = (
-        round(sum(s["marks"] for s in students) / len(students), 2)
+        round(sum(float(s["marks"]) for s in students) / len(students), 2)
         if students else 0
     )
 
@@ -58,24 +70,50 @@ def add_student():
     if not name or not 0 <= marks <= 100:
         return "Enter a name and marks between 0 and 100.", 400
 
-    students.append({"name": name, "marks": marks})
-    save_students()
+    conn = get_connection()
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO students (name, marks) VALUES (%s, %s)",
+                    (name, marks)
+                )
+    finally:
+        conn.close()
+
     return redirect(url_for("home"))
 
 
 @app.route("/delete/<int:index>", methods=["POST"])
 def delete_student(index):
+    students = load_students()
+
     if 0 <= index < len(students):
-        students.pop(index)
-        save_students()
+        student_id = students[index]["id"]
+        conn = get_connection()
+
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM students WHERE id = %s",
+                        (student_id,)
+                    )
+        finally:
+            conn.close()
 
     return redirect(url_for("home"))
 
 
 @app.route("/edit/<int:index>", methods=["GET", "POST"])
 def edit_student(index):
+    students = load_students()
+
     if not 0 <= index < len(students):
         return "Student not found.", 404
+
+    student = students[index]
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -88,13 +126,27 @@ def edit_student(index):
         if not name or not 0 <= marks <= 100:
             return "Enter a name and marks between 0 and 100.", 400
 
-        students[index] = {"name": name, "marks": marks}
-        save_students()
+        conn = get_connection()
+
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE students
+                        SET name = %s, marks = %s
+                        WHERE id = %s
+                        """,
+                        (name, marks, student["id"])
+                    )
+        finally:
+            conn.close()
+
         return redirect(url_for("home"))
 
     return render_template(
         "edit.html",
-        student=students[index],
+        student=student,
         index=index
     )
 
